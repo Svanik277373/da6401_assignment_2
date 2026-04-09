@@ -1,0 +1,7 @@
+__pycache__/
+*.pyc
+wandb/
+checkpoints/*.pth
+reports/assets/
+oxford-iiit-pet/
+*.torrent
