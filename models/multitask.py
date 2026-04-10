@@ -98,8 +98,10 @@ class MultiTaskPerceptionModel(nn.Module):
         classification_bottleneck = self.classification_encoder(x)
         localization_bottleneck = self.encoder(x)
         segmentation_bottleneck, segmentation_features = self.segmentation_encoder(x, return_features=True)
+        localization = self.localization_head(localization_bottleneck)
+        box_scale = localization.new_tensor([x.shape[-1], x.shape[-2], x.shape[-1], x.shape[-2]])
         return {
             "classification": self.classification_head(classification_bottleneck),
-            "localization": self.localization_head(localization_bottleneck),
+            "localization": localization * box_scale,
             "segmentation": self.segmentation_head(segmentation_bottleneck, segmentation_features),
         }

@@ -36,7 +36,11 @@ class VGG11Encoder(nn.Module):
         self.block3 = conv_block(128, 256, 2)
         self.block4 = conv_block(256, 512, 2)
         self.block5 = conv_block(512, 512, 2)
-        self.pool = nn.MaxPool2d(kernel_size=2, stride=2)
+        self.pool1 = nn.MaxPool2d(kernel_size=2, stride=2)
+        self.pool2 = nn.MaxPool2d(kernel_size=2, stride=2)
+        self.pool3 = nn.MaxPool2d(kernel_size=2, stride=2)
+        self.pool4 = nn.MaxPool2d(kernel_size=2, stride=2)
+        self.pool5 = nn.MaxPool2d(kernel_size=2, stride=2)
         for m in self.modules():
             if isinstance(m, nn.Conv2d):
                 nn.init.kaiming_normal_(m.weight, mode='fan_out', nonlinearity='relu')
@@ -54,23 +58,23 @@ class VGG11Encoder(nn.Module):
 
         x = self.block1(x)
         features["block1"] = x
-        x = self.pool(x)
+        x = self.pool1(x)
 
         x = self.block2(x)
         features["block2"] = x
-        x = self.pool(x)
+        x = self.pool2(x)
 
         x = self.block3(x)
         features["block3"] = x
-        x = self.pool(x)
+        x = self.pool3(x)
 
         x = self.block4(x)
         features["block4"] = x
-        x = self.pool(x)
+        x = self.pool4(x)
 
         x = self.block5(x)
         features["block5"] = x
-        x = self.pool(x)
+        x = self.pool5(x)
 
         if return_features:
             return x, features

@@ -56,24 +56,17 @@ def main():
         print({"predicted_breed_label": outputs.argmax(dim=1).item()})
         
     elif args.task == "localization":
-        # FIX: Scale the normalized [0, 1] output by the image size (e.g., 224)
-        raw_bbox = outputs.squeeze(0).cpu()
-        scaled_bbox = (raw_bbox * args.image_size).tolist()
-        print({"predicted_bbox_xywh": scaled_bbox})
+        print({"predicted_bbox_xywh": outputs.squeeze(0).cpu().tolist()})
         
     elif args.task == "segmentation":
         mask = outputs.argmax(dim=1).squeeze(0).cpu()
         print({"predicted_mask_shape": tuple(mask.shape), "unique_labels": torch.unique(mask).tolist()})
         
     else:
-        # FIX: Scale the multitask localization output as well
-        raw_bbox = outputs["localization"].squeeze(0).cpu()
-        scaled_bbox = (raw_bbox * args.image_size).tolist()
-        
         print(
             {
                 "predicted_breed_label": outputs["classification"].argmax(dim=1).item(),
-                "predicted_bbox_xywh": scaled_bbox,
+                "predicted_bbox_xywh": outputs["localization"].squeeze(0).cpu().tolist(),
                 "predicted_mask_shape": tuple(outputs["segmentation"].argmax(dim=1).squeeze(0).cpu().shape),
             }
         )

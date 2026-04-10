@@ -40,5 +40,7 @@ class VGG11Localizer(nn.Module):
                 parameter.requires_grad = False
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        """Return normalized boxes in (x_center, y_center, width, height) format."""
-        return self.head(self.encoder(x))
+        """Return image-space boxes in (x_center, y_center, width, height) format."""
+        boxes = self.head(self.encoder(x))
+        scale = boxes.new_tensor([x.shape[-1], x.shape[-2], x.shape[-1], x.shape[-2]])
+        return boxes * scale
