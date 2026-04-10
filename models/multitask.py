@@ -50,6 +50,8 @@ class MultiTaskPerceptionModel(nn.Module):
     ):
         super().__init__()
         self.encoder = VGG11Encoder(in_channels=in_channels, use_batchnorm=use_batchnorm)
+        self.classification_encoder = VGG11Encoder(in_channels=in_channels, use_batchnorm=use_batchnorm)
+        self.segmentation_encoder = VGG11Encoder(in_channels=in_channels, use_batchnorm=use_batchnorm)
         self.classification_head = ClassificationHead(
             in_channels=self.encoder.output_channels,
             num_classes=num_breeds,
@@ -80,18 +82,24 @@ class MultiTaskPerceptionModel(nn.Module):
         self.localization_head.load_state_dict(localizer_weights, strict=True)
 
         classifier_state = _read_state_dict(classifier_path, device=device)
+        classifier_encoder_weights = {k[len("encoder.") :]: v for k, v in classifier_state.items() if k.startswith("encoder.")}
         classifier_weights = {k[len("head.") :]: v for k, v in classifier_state.items() if k.startswith("head.")}
+        self.classification_encoder.load_state_dict(classifier_encoder_weights, strict=True)
         self.classification_head.load_state_dict(classifier_weights, strict=True)
 
         unet_state = _read_state_dict(unet_path, device=device)
+        segmentation_encoder_weights = {k[len("encoder.") :]: v for k, v in unet_state.items() if k.startswith("encoder.")}
         unet_weights = {k[len("decoder.") :]: v for k, v in unet_state.items() if k.startswith("decoder.")}
+        self.segmentation_encoder.load_state_dict(segmentation_encoder_weights, strict=True)
         self.segmentation_head.load_state_dict(unet_weights, strict=True)
 
     def forward(self, x: torch.Tensor):
         """Return outputs for all three tasks in a single forward pass."""
-        bottleneck, features = self.encoder(x, return_features=True)
+        classification_bottleneck = self.classification_encoder(x)
+        localization_bottleneck = self.encoder(x)
+        segmentation_bottleneck, segmentation_features = self.segmentation_encoder(x, return_features=True)
         return {
-            "classification": self.classification_head(bottleneck),
-            "localization": self.localization_head(bottleneck),
-            "segmentation": self.segmentation_head(bottleneck, features),
+            "classification": self.classification_head(classification_bottleneck),
+            "localization": self.localization_head(localization_bottleneck),
+            "segmentation": self.segmentation_head(segmentation_bottleneck, segmentation_features),
         }
