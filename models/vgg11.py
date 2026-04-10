@@ -37,6 +37,14 @@ class VGG11Encoder(nn.Module):
         self.block4 = conv_block(256, 512, 2)
         self.block5 = conv_block(512, 512, 2)
         self.pool = nn.MaxPool2d(kernel_size=2, stride=2)
+        for m in self.modules():
+            if isinstance(m, nn.Conv2d):
+                nn.init.kaiming_normal_(m.weight, mode='fan_out', nonlinearity='relu')
+                if m.bias is not None:
+                    nn.init.constant_(m.bias, 0)
+            elif isinstance(m, nn.BatchNorm2d):
+                nn.init.constant_(m.weight, 1)
+                nn.init.constant_(m.bias, 0)
 
     def forward(
         self, x: torch.Tensor, return_features: bool = False

@@ -11,10 +11,12 @@ class BoundingBoxHead(nn.Module):
 
     def __init__(self, in_channels: int = 512):
         super().__init__()
-        self.pool = nn.AdaptiveAvgPool2d((1, 1))
+        # FIX: Preserve spatial dimensions (7x7 instead of 1x1) to retain location data
+        self.pool = nn.AdaptiveAvgPool2d((7, 7))
         self.regressor = nn.Sequential(
             nn.Flatten(),
-            nn.Linear(in_channels, 512),
+            # FIX: Input features are now 512 channels * 7 height * 7 width
+            nn.Linear(in_channels * 7 * 7, 512),
             nn.ReLU(inplace=True),
             nn.Linear(512, 128),
             nn.ReLU(inplace=True),

@@ -1,7 +1,9 @@
-"""Unified multi-task model."""
+"""Unified multi-task model with automated weight downloading for submission."""
 
 import torch
 import torch.nn as nn
+import os
+import gdown
 
 from .classification import ClassificationHead
 from .localization import BoundingBoxHead
@@ -20,6 +22,18 @@ class MultiTaskPerceptionModel(nn.Module):
         dropout_p: float = 0.5,
         use_batchnorm: bool = True,
     ):
+        # --- Submission Automated Download Block ---
+        classifier_path = "checkpoints/classifier.pth"
+        localizer_path = "checkpoints/localizer.pth"
+        unet_path = "checkpoints/unet.pth"
+        
+        os.makedirs("checkpoints", exist_ok=True)
+        
+        gdown.download(id="16iMeSR3wC1B4y1P7tT_1yVCoKXXzlK0O", output=classifier_path, quiet=False)
+        gdown.download(id="12XZtccwznbwS4NiPDG4wKGWWzMWe2vZN", output=localizer_path, quiet=False)
+        gdown.download(id="17wdzjIDlZG-o9CtzCEXZgXpC3iYw7Wun", output=unet_path, quiet=False)
+        # --------------------------------------------
+
         super().__init__()
         self.encoder = VGG11Encoder(in_channels=in_channels, use_batchnorm=use_batchnorm)
         self.classification_head = ClassificationHead(
