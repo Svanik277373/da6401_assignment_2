@@ -73,15 +73,15 @@ class MultiTaskPerceptionModel(nn.Module):
         for checkpoint_path in (classifier_path, localizer_path, unet_path):
             _download_checkpoint_if_missing(checkpoint_path)
 
-        classifier_state = _read_state_dict(classifier_path, device=device)
-        encoder_weights = {k[len("encoder.") :]: v for k, v in classifier_state.items() if k.startswith("encoder.")}
-        classifier_weights = {k[len("head.") :]: v for k, v in classifier_state.items() if k.startswith("head.")}
-        self.encoder.load_state_dict(encoder_weights, strict=True)
-        self.classification_head.load_state_dict(classifier_weights, strict=True)
-
         localizer_state = _read_state_dict(localizer_path, device=device)
+        encoder_weights = {k[len("encoder.") :]: v for k, v in localizer_state.items() if k.startswith("encoder.")}
         localizer_weights = {k[len("head.") :]: v for k, v in localizer_state.items() if k.startswith("head.")}
+        self.encoder.load_state_dict(encoder_weights, strict=True)
         self.localization_head.load_state_dict(localizer_weights, strict=True)
+
+        classifier_state = _read_state_dict(classifier_path, device=device)
+        classifier_weights = {k[len("head.") :]: v for k, v in classifier_state.items() if k.startswith("head.")}
+        self.classification_head.load_state_dict(classifier_weights, strict=True)
 
         unet_state = _read_state_dict(unet_path, device=device)
         unet_weights = {k[len("decoder.") :]: v for k, v in unet_state.items() if k.startswith("decoder.")}
