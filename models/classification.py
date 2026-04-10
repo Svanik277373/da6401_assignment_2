@@ -1,5 +1,6 @@
 import torch
 import torch.nn as nn
+from .checkpoints import CLASSIFIER_CHECKPOINT, read_state_dict
 from .layers import CustomDropout
 from .vgg11 import VGG11Encoder
 
@@ -24,8 +25,11 @@ class ClassificationHead(nn.Module):
         return self.classifier(torch.flatten(self.avgpool(x), 1))
 
 class VGG11Classifier(nn.Module):
-    def __init__(self, num_classes=37, dropout_p=0.5, use_batchnorm=True):
+    def __init__(self, num_classes=37, dropout_p=0.5, use_batchnorm=True, load_checkpoint=True):
         super().__init__()
         self.encoder = VGG11Encoder(use_batchnorm=use_batchnorm)
         self.head = ClassificationHead(num_classes=num_classes, dropout_p=dropout_p, use_batchnorm=use_batchnorm)
+        if load_checkpoint:
+            self.load_state_dict(read_state_dict(CLASSIFIER_CHECKPOINT), strict=True)
+
     def forward(self, x): return self.head(self.encoder(x))

@@ -1,39 +1,13 @@
 """Unified multi-task model initialized from saved task checkpoints."""
 
-import os
-
-import gdown
 import torch
 import torch.nn as nn
 
+from .checkpoints import CLASSIFIER_CHECKPOINT, LOCALIZER_CHECKPOINT, UNET_CHECKPOINT, read_state_dict
 from .classification import ClassificationHead
 from .localization import BoundingBoxHead
 from .segmentation import UNetDecoder
 from .vgg11 import VGG11Encoder
-
-CLASSIFIER_CHECKPOINT = "checkpoints/classifier.pth"
-LOCALIZER_CHECKPOINT = "checkpoints/localizer.pth"
-UNET_CHECKPOINT = "checkpoints/unet.pth"
-
-CHECKPOINT_DOWNLOADS = {
-    CLASSIFIER_CHECKPOINT: "16iMeSR3wC1B4y1P7tT_1yVCoKXXzlK0O",
-    LOCALIZER_CHECKPOINT: "12XZtccwznbwS4NiPDG4wKGWWzMWe2vZN",
-    UNET_CHECKPOINT: "17wdzjIDlZG-o9CtzCEXZgXpC3iYw7Wun",
-}
-
-
-def _download_checkpoint_if_missing(checkpoint_path: str) -> None:
-    if os.path.exists(checkpoint_path):
-        return
-    os.makedirs(os.path.dirname(checkpoint_path), exist_ok=True)
-    gdown.download(id=CHECKPOINT_DOWNLOADS[checkpoint_path], output=checkpoint_path, quiet=False)
-
-
-def _read_state_dict(checkpoint_path: str, device: torch.device | str = "cpu"):
-    checkpoint = torch.load(checkpoint_path, map_location=device)
-    if isinstance(checkpoint, dict) and "state_dict" in checkpoint:
-        return checkpoint["state_dict"]
-    return checkpoint
 
 
 class MultiTaskPerceptionModel(nn.Module):
@@ -47,8 +21,10 @@ class MultiTaskPerceptionModel(nn.Module):
         dropout_p: float = 0.5,
         use_batchnorm: bool = True,
         load_checkpoints: bool = True,
+        image_space_output: bool = True,
     ):
         super().__init__()
+        self.image_space_output = image_space_output
         self.encoder = VGG11Encoder(in_channels=in_channels, use_batchnorm=use_batchnorm)
         self.classification_encoder = VGG11Encoder(in_channels=in_channels, use_batchnorm=use_batchnorm)
         self.segmentation_encoder = VGG11Encoder(in_channels=in_channels, use_batchnorm=use_batchnorm)
@@ -72,22 +48,19 @@ class MultiTaskPerceptionModel(nn.Module):
         device: torch.device | str = "cpu",
     ) -> None:
         """Load the shared encoder and task heads from saved relative checkpoints."""
-        for checkpoint_path in (classifier_path, localizer_path, unet_path):
-            _download_checkpoint_if_missing(checkpoint_path)
-
-        localizer_state = _read_state_dict(localizer_path, device=device)
+        localizer_state = read_state_dict(localizer_path, device=device)
         encoder_weights = {k[len("encoder.") :]: v for k, v in localizer_state.items() if k.startswith("encoder.")}
         localizer_weights = {k[len("head.") :]: v for k, v in localizer_state.items() if k.startswith("head.")}
         self.encoder.load_state_dict(encoder_weights, strict=True)
         self.localization_head.load_state_dict(localizer_weights, strict=True)
 
-        classifier_state = _read_state_dict(classifier_path, device=device)
+        classifier_state = read_state_dict(classifier_path, device=device)
         classifier_encoder_weights = {k[len("encoder.") :]: v for k, v in classifier_state.items() if k.startswith("encoder.")}
         classifier_weights = {k[len("head.") :]: v for k, v in classifier_state.items() if k.startswith("head.")}
         self.classification_encoder.load_state_dict(classifier_encoder_weights, strict=True)
         self.classification_head.load_state_dict(classifier_weights, strict=True)
 
-        unet_state = _read_state_dict(unet_path, device=device)
+        unet_state = read_state_dict(unet_path, device=device)
         segmentation_encoder_weights = {k[len("encoder.") :]: v for k, v in unet_state.items() if k.startswith("encoder.")}
         unet_weights = {k[len("decoder.") :]: v for k, v in unet_state.items() if k.startswith("decoder.")}
         self.segmentation_encoder.load_state_dict(segmentation_encoder_weights, strict=True)
@@ -99,9 +72,11 @@ class MultiTaskPerceptionModel(nn.Module):
         localization_bottleneck = self.encoder(x)
         segmentation_bottleneck, segmentation_features = self.segmentation_encoder(x, return_features=True)
         localization = self.localization_head(localization_bottleneck)
-        box_scale = localization.new_tensor([x.shape[-1], x.shape[-2], x.shape[-1], x.shape[-2]])
+        if self.image_space_output:
+            box_scale = localization.new_tensor([x.shape[-1], x.shape[-2], x.shape[-1], x.shape[-2]])
+            localization = localization * box_scale
         return {
             "classification": self.classification_head(classification_bottleneck),
-            "localization": localization * box_scale,
+            "localization": localization,
             "segmentation": self.segmentation_head(segmentation_bottleneck, segmentation_features),
         }

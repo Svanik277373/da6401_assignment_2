@@ -4,6 +4,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
+from .checkpoints import UNET_CHECKPOINT, read_state_dict
 from .vgg11 import VGG11Encoder
 
 
@@ -76,10 +77,18 @@ class UNetDecoder(nn.Module):
 class VGG11UNet(nn.Module):
     """U-Net style segmentation network."""
 
-    def __init__(self, num_classes: int = 3, in_channels: int = 3, use_batchnorm: bool = True):
+    def __init__(
+        self,
+        num_classes: int = 3,
+        in_channels: int = 3,
+        use_batchnorm: bool = True,
+        load_checkpoint: bool = True,
+    ):
         super().__init__()
         self.encoder = VGG11Encoder(in_channels=in_channels, use_batchnorm=use_batchnorm)
         self.decoder = UNetDecoder(num_classes=num_classes, use_batchnorm=use_batchnorm)
+        if load_checkpoint:
+            self.load_state_dict(read_state_dict(UNET_CHECKPOINT), strict=True)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         """Return segmentation logits."""

@@ -60,12 +60,29 @@ def box_iou_mean(pred_boxes: torch.Tensor, target_boxes: torch.Tensor, eps: floa
 
 def build_model(args):
     if args.task == "classification":
-        return VGG11Classifier(num_classes=37, dropout_p=args.dropout, use_batchnorm=not args.disable_batchnorm)
+        return VGG11Classifier(
+            num_classes=37,
+            dropout_p=args.dropout,
+            use_batchnorm=not args.disable_batchnorm,
+            load_checkpoint=False,
+        )
     if args.task == "localization":
-        return VGG11Localizer(use_batchnorm=not args.disable_batchnorm, freeze_encoder=args.freeze_encoder)
+        return VGG11Localizer(
+            use_batchnorm=not args.disable_batchnorm,
+            freeze_encoder=args.freeze_encoder,
+            load_checkpoint=False,
+            image_space_output=False,
+        )
     if args.task == "segmentation":
-        return VGG11UNet(num_classes=3, use_batchnorm=not args.disable_batchnorm)
-    return MultiTaskPerceptionModel(num_breeds=37, seg_classes=3, dropout_p=args.dropout, use_batchnorm=not args.disable_batchnorm)
+        return VGG11UNet(num_classes=3, use_batchnorm=not args.disable_batchnorm, load_checkpoint=False)
+    return MultiTaskPerceptionModel(
+        num_breeds=37,
+        seg_classes=3,
+        dropout_p=args.dropout,
+        use_batchnorm=not args.disable_batchnorm,
+        load_checkpoints=False,
+        image_space_output=False,
+    )
 
 def maybe_initialize_model(model, args, device: torch.device) -> None:
     if args.init_from:
