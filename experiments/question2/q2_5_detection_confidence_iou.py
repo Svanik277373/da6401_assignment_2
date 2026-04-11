@@ -18,7 +18,7 @@ def parse_args():
     parser = argparse.ArgumentParser()
     parser.add_argument("--checkpoint", required=True)
     parser.add_argument("--task", choices=["multitask", "localization"], default="multitask")
-    parser.add_argument("--data-root", default="oxford-iiit-pet")
+    parser.add_argument("--data-root", default="D:/oxford-iiit-pet")
     parser.add_argument("--batch-size", type=int, default=10)
     parser.add_argument("--image-size", type=int, default=224)
     parser.add_argument("--project", default="da6401-assignment-2")
