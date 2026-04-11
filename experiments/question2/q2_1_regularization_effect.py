@@ -16,9 +16,9 @@ from experiments.question2.common import build_args, first_batch, make_dataloade
 def parse_args():
     parser = argparse.ArgumentParser()
     parser.add_argument("--data-root", default="oxford-iiit-pet")
-    parser.add_argument("--epochs", type=int, default=5)
+    parser.add_argument("--epochs", type=int, default=50)
     parser.add_argument("--batch-size", type=int, default=16)
-    parser.add_argument("--lr", type=float, default=1e-3)
+    parser.add_argument("--lr", type=float, default=5e-4)
     parser.add_argument("--image-size", type=int, default=224)
     parser.add_argument("--project", default="da6401-assignment-2")
     parser.add_argument("--disable-wandb", action="store_true")
