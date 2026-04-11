@@ -5,13 +5,18 @@ from __future__ import annotations
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Iterable, Optional
+import warnings
 
+import matplotlib
+matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import matplotlib.patches as patches
 import numpy as np
 import torch
+import torchvision.transforms as T
 from PIL import Image
 from torch.utils.data import DataLoader
+from tqdm import tqdm
 
 try:
     import wandb
@@ -26,9 +31,9 @@ from train import build_criteria, build_model, set_seed, train_or_eval_epoch
 DEFAULTS = {
     "task": "classification",
     "data_root": "oxford-iiit-pet",
-    "epochs": 5,
+    "epochs": 50,
     "batch_size": 16,
-    "lr": 1e-3,
+    "lr": 5e-4,
     "image_size": 224,
     "dropout": 0.5,
     "seed": 42,
@@ -80,18 +85,39 @@ def train_once(args, freeze_strategy: Optional[str] = None):
         apply_freeze_strategy(model, freeze_strategy)
 
     criteria = build_criteria(args.task)
-    optimizer = torch.optim.Adam(filter(lambda p: p.requires_grad, model.parameters()), lr=args.lr)
+    
+    # MATCH TRAIN.PY: Use AdamW with weight decay
+    optimizer = torch.optim.AdamW(filter(lambda p: p.requires_grad, model.parameters()), lr=args.lr, weight_decay=1e-2)
+
+    # MATCH TRAIN.PY: Add OneCycleLR Scheduler
+    scheduler = torch.optim.lr_scheduler.OneCycleLR(
+        optimizer,
+        max_lr=args.lr,
+        steps_per_epoch=len(train_loader),
+        epochs=args.epochs,
+        pct_start=0.3
+    )
 
     run = None
     if not args.disable_wandb and wandb is not None:
-        run = wandb.init(project=args.wandb_project, name=args.wandb_run_name or None, config=dict(vars(args)))
+        run = wandb.init(
+            project=args.wandb_project, 
+            name=args.wandb_run_name or None, 
+            dir="D:/wandb_logs", 
+            config=dict(vars(args))
+        )
 
     history = {"train": [], "val": []}
     best_score = float("-inf")
     checkpoint_path = Path(args.checkpoint_path) if args.checkpoint_path else None
 
-    for epoch in range(1, args.epochs + 1):
-        train_metrics = train_or_eval_epoch(model, train_loader, optimizer, criteria, device, args.task, train=True)
+    # Global tqdm progress bar for overall progress
+    for epoch in tqdm(range(1, args.epochs + 1), desc="Total Training Progress"):
+        
+        # EXACT MATCH TO TRAIN.PY LOGGING: Print Epoch and LR
+        print(f"\nEpoch {epoch} | Current LR: {optimizer.param_groups[0]['lr']:.6f}")
+        
+        train_metrics = train_or_eval_epoch(model, train_loader, optimizer, criteria, device, args.task, train=True, scheduler=scheduler)
         val_metrics = train_or_eval_epoch(model, val_loader, optimizer, criteria, device, args.task, train=False)
         history["train"].append(train_metrics)
         history["val"].append(val_metrics)
@@ -102,10 +128,18 @@ def train_once(args, freeze_strategy: Optional[str] = None):
             checkpoint_path.parent.mkdir(parents=True, exist_ok=True)
             torch.save({"state_dict": model.state_dict(), "epoch": epoch, "task": args.task}, checkpoint_path)
 
+        # EXACT MATCH TO TRAIN.PY LOGGING: Print Metrics
+        print(f"  train: {train_metrics}\n  val:   {val_metrics}")
+
         if run is not None:
             payload = {f"train/{k}": v for k, v in train_metrics.items()}
             payload.update({f"val/{k}": v for k, v in val_metrics.items()})
+            if "macro_f1" in train_metrics:
+                payload["train/f1"] = train_metrics["macro_f1"]
+            if "macro_f1" in val_metrics:
+                payload["val/f1"] = val_metrics["macro_f1"]
             payload["epoch"] = epoch
+            payload["lr"] = optimizer.param_groups[0]["lr"]
             wandb.log(payload)
 
     if run is not None:
@@ -132,33 +166,69 @@ def apply_freeze_strategy(model: torch.nn.Module, strategy: str) -> None:
 
 def load_model(task: str, checkpoint_path: str | Path, device: Optional[torch.device] = None):
     device = device or make_device()
+    
+    # Initialize with load_checkpoint=False to prevent redundant weight downloads
+    # Initialize localizers with image_space_output=False for proper wandb rendering
     if task == "classification":
-        model = VGG11Classifier()
+        model = VGG11Classifier(load_checkpoint=False)
     elif task == "localization":
-        model = VGG11Localizer()
+        model = VGG11Localizer(image_space_output=False, load_checkpoint=False)
     elif task == "segmentation":
-        model = VGG11UNet()
+        model = VGG11UNet(load_checkpoint=False)
     else:
-        model = MultiTaskPerceptionModel()
+        model = MultiTaskPerceptionModel(image_space_output=False, load_checkpoints=False)
+        
     checkpoint = torch.load(checkpoint_path, map_location=device)
     state_dict = checkpoint["state_dict"] if isinstance(checkpoint, dict) and "state_dict" in checkpoint else checkpoint
-    model.load_state_dict(state_dict)
+
+    # Backward-compatibility for older multitask checkpoints that stored a
+    # single shared encoder instead of separate classification/segmentation encoders.
+    if task == "multitask":
+        model_state = model.state_dict()
+        patched_state = dict(state_dict)
+
+        if "classification_encoder.block1.0.weight" not in patched_state:
+            encoder_weights = {
+                key[len("encoder.") :]: value
+                for key, value in state_dict.items()
+                if key.startswith("encoder.")
+            }
+            for branch in ("classification_encoder", "segmentation_encoder"):
+                for key, value in encoder_weights.items():
+                    branch_key = f"{branch}.{key}"
+                    if branch_key in model_state and branch_key not in patched_state:
+                        patched_state[branch_key] = value
+
+        model.load_state_dict(patched_state, strict=False)
+    else:
+        model.load_state_dict(state_dict)
+
     model.to(device)
     model.eval()
     return model
 
 
 def load_single_image(image_path: str | Path, image_size: int = 224) -> torch.Tensor:
+    # Proper ImageNet normalization applied for downstream tasks
     image = Image.open(image_path).convert("RGB")
-    image = image.resize((image_size, image_size), Image.Resampling.BILINEAR)
-    array = np.asarray(image, dtype=np.float32) / 255.0
-    return torch.from_numpy(array).permute(2, 0, 1)
+    transform = T.Compose([
+        T.Resize((image_size, image_size)),
+        T.ToTensor(),
+        T.Normalize(mean=(0.485, 0.456, 0.406), std=(0.229, 0.224, 0.225))
+    ])
+    return transform(image)
 
 
 def make_wandb_image_from_bbox(image_tensor: torch.Tensor, gt_box=None, pred_box=None, caption: str = ""):
     if wandb is None:
         return None
+    # Un-normalize image for display
     image_np = image_tensor.detach().cpu().permute(1, 2, 0).numpy()
+    mean = np.array([0.485, 0.456, 0.406])
+    std = np.array([0.229, 0.224, 0.225])
+    image_np = std * image_np + mean
+    image_np = np.clip(image_np, 0, 1)
+
     fig, ax = plt.subplots(figsize=(5, 5))
     ax.imshow(image_np)
     ax.axis("off")
@@ -193,7 +263,13 @@ def feature_maps_to_images(feature_tensor: torch.Tensor, limit: int = 16) -> lis
 
 
 def overlay_mask(image_tensor: torch.Tensor, mask_tensor: torch.Tensor) -> np.ndarray:
+    # Un-normalize image for display
     image = image_tensor.detach().cpu().permute(1, 2, 0).numpy()
+    mean = np.array([0.485, 0.456, 0.406])
+    std = np.array([0.229, 0.224, 0.225])
+    image = std * image + mean
+    image = np.clip(image, 0, 1)
+    
     mask = mask_tensor.detach().cpu().numpy()
     color_map = np.array(
         [
@@ -204,7 +280,143 @@ def overlay_mask(image_tensor: torch.Tensor, mask_tensor: torch.Tensor) -> np.nd
         dtype=np.float32,
     ) / 255.0
     colored = color_map[np.clip(mask, 0, 2)]
-    return 0.6 * image + 0.4 * colored
+    overlay = 0.6 * image + 0.4 * colored
+    return (np.clip(overlay, 0, 1) * 255).astype(np.uint8)
+
+
+def colorize_mask(mask_tensor: torch.Tensor) -> np.ndarray:
+    mask = mask_tensor.detach().cpu().numpy()
+    color_map = np.array(
+        [
+            [255, 0, 0],
+            [0, 255, 0],
+            [0, 0, 255],
+        ],
+        dtype=np.float32,
+    ) / 255.0
+    return (np.clip(color_map[np.clip(mask, 0, 2)], 0, 1) * 255).astype(np.uint8)
+
+
+def to_display_image(image_tensor: torch.Tensor) -> np.ndarray:
+    image = image_tensor.detach().cpu().permute(1, 2, 0).numpy()
+    mean = np.array([0.485, 0.456, 0.406])
+    std = np.array([0.229, 0.224, 0.225])
+    image = std * image + mean
+    return (np.clip(image, 0, 1) * 255).astype(np.uint8)
+
+
+def pixel_accuracy_from_logits(logits: torch.Tensor, targets: torch.Tensor) -> float:
+    preds = logits.argmax(dim=1)
+    return float((preds == targets).float().mean().item())
+
+
+def evaluate_segmentation_checkpoint(model, loader: DataLoader, device: torch.device):
+    all_logits = []
+    all_targets = []
+    examples = []
+
+    with torch.no_grad():
+        for batch in loader:
+            images = batch["image"].to(device)
+            logits = model(images).cpu()
+            targets = batch["segmentation_mask"].cpu()
+
+            all_logits.append(logits)
+            all_targets.append(targets)
+
+            if len(examples) < 5:
+                preds = logits.argmax(dim=1)
+                limit = min(5 - len(examples), preds.size(0))
+                for idx in range(limit):
+                    examples.append(
+                        {
+                            "image_id": batch["image_id"][idx],
+                            "image": batch["image"][idx].cpu(),
+                            "target": targets[idx],
+                            "pred": preds[idx],
+                        }
+                    )
+
+    return {
+        "logits": torch.cat(all_logits, dim=0),
+        "targets": torch.cat(all_targets, dim=0),
+        "examples": examples,
+    }
+
+
+def train_segmentation_for_epochs(args, epochs: int):
+    run_args = build_args(
+        task="segmentation",
+        data_root=args.data_root,
+        image_size=args.image_size,
+        batch_size=args.batch_size,
+        lr=args.lr,
+        seed=args.seed,
+        num_workers=args.num_workers,
+        disable_batchnorm=args.disable_batchnorm,
+    )
+    set_seed(run_args.seed)
+    device = make_device()
+    train_loader, val_loader = make_dataloaders(run_args)
+    model = build_model(run_args).to(device)
+    criteria = build_criteria("segmentation")
+    optimizer = torch.optim.AdamW(filter(lambda p: p.requires_grad, model.parameters()), lr=run_args.lr, weight_decay=1e-2)
+    scheduler = torch.optim.lr_scheduler.OneCycleLR(
+        optimizer,
+        max_lr=run_args.lr,
+        steps_per_epoch=len(train_loader),
+        epochs=epochs,
+        pct_start=0.3,
+    )
+
+    history = []
+    for epoch in range(1, epochs + 1):
+        with warnings.catch_warnings():
+            warnings.filterwarnings(
+                "ignore",
+                message="invalid value encountered in divide",
+                category=RuntimeWarning,
+                module=r"albumentations\.augmentations\.dropout\.functional",
+            )
+            train_metrics = train_or_eval_epoch(
+                model,
+                train_loader,
+                optimizer,
+                criteria,
+                device,
+                "segmentation",
+                train=True,
+                scheduler=scheduler,
+            )
+        val_eval = evaluate_segmentation_checkpoint(model, val_loader, device)
+        val_loss = float(criteria["segmentation"](val_eval["logits"], val_eval["targets"]).item())
+        val_dice = float(
+            (
+                2.0
+                * (((val_eval["logits"].argmax(dim=1) == 0).float() * (val_eval["targets"] == 0).float()).sum(dim=(1, 2)))
+                + 1e-6
+            )
+            .div(
+                (val_eval["logits"].argmax(dim=1) == 0).float().sum(dim=(1, 2))
+                + (val_eval["targets"] == 0).float().sum(dim=(1, 2))
+                + 1e-6
+            )
+            .mean()
+            .item()
+        )
+        val_pixel_accuracy = pixel_accuracy_from_logits(val_eval["logits"], val_eval["targets"])
+        history.append(
+            {
+                "epoch": epoch,
+                "train_loss": train_metrics["loss"],
+                "train_dice": train_metrics["dice"],
+                "val_loss": val_loss,
+                "val_dice": val_dice,
+                "val_pixel_accuracy": val_pixel_accuracy,
+            }
+        )
+
+    return model, history
 
 
 def first_batch(loader: DataLoader):
