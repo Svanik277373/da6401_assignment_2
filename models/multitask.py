@@ -20,16 +20,14 @@ class MultiTaskPerceptionModel(nn.Module):
         in_channels: int = 3,
         dropout_p: float = 0.5,
         use_batchnorm: bool = True,
-        load_checkpoints: bool = False,
+        load_checkpoints: bool = True,
         image_space_output: bool = True,
     ):
         super().__init__()
         self.image_space_output = image_space_output
-        
-        # ONE Shared Backbone Encoder
         self.encoder = VGG11Encoder(in_channels=in_channels, use_batchnorm=use_batchnorm)
-        
-        # Task Heads
+        self.classification_encoder = VGG11Encoder(in_channels=in_channels, use_batchnorm=use_batchnorm)
+        self.segmentation_encoder = VGG11Encoder(in_channels=in_channels, use_batchnorm=use_batchnorm)
         self.classification_head = ClassificationHead(
             in_channels=self.encoder.output_channels,
             num_classes=num_breeds,
@@ -49,37 +47,36 @@ class MultiTaskPerceptionModel(nn.Module):
         unet_path: str = UNET_CHECKPOINT,
         device: torch.device | str = "cpu",
     ) -> None:
-        """Load the shared encoder from classifier and task heads from relative checkpoints."""
-        # Base the shared encoder on the classification pretrained weights
-        classifier_state = read_state_dict(classifier_path, device=device)
-        encoder_weights = {k[len("encoder.") :]: v for k, v in classifier_state.items() if k.startswith("encoder.")}
-        classifier_weights = {k[len("head.") :]: v for k, v in classifier_state.items() if k.startswith("head.")}
-        self.encoder.load_state_dict(encoder_weights, strict=True)
-        self.classification_head.load_state_dict(classifier_weights, strict=True)
-
-        # Load localization head
+        """Load the shared encoder and task heads from saved relative checkpoints."""
         localizer_state = read_state_dict(localizer_path, device=device)
+        encoder_weights = {k[len("encoder.") :]: v for k, v in localizer_state.items() if k.startswith("encoder.")}
         localizer_weights = {k[len("head.") :]: v for k, v in localizer_state.items() if k.startswith("head.")}
+        self.encoder.load_state_dict(encoder_weights, strict=True)
         self.localization_head.load_state_dict(localizer_weights, strict=True)
 
-        # Load segmentation head
+        classifier_state = read_state_dict(classifier_path, device=device)
+        classifier_encoder_weights = {k[len("encoder.") :]: v for k, v in classifier_state.items() if k.startswith("encoder.")}
+        classifier_weights = {k[len("head.") :]: v for k, v in classifier_state.items() if k.startswith("head.")}
+        self.classification_encoder.load_state_dict(classifier_encoder_weights, strict=True)
+        self.classification_head.load_state_dict(classifier_weights, strict=True)
+
         unet_state = read_state_dict(unet_path, device=device)
+        segmentation_encoder_weights = {k[len("encoder.") :]: v for k, v in unet_state.items() if k.startswith("encoder.")}
         unet_weights = {k[len("decoder.") :]: v for k, v in unet_state.items() if k.startswith("decoder.")}
+        self.segmentation_encoder.load_state_dict(segmentation_encoder_weights, strict=True)
         self.segmentation_head.load_state_dict(unet_weights, strict=True)
 
     def forward(self, x: torch.Tensor):
         """Return outputs for all three tasks in a single forward pass."""
-        # Single forward pass through the shared backbone
-        shared_bottleneck, shared_features = self.encoder(x, return_features=True)
-        
-        # Localization output
-        localization = self.localization_head(shared_bottleneck)
+        classification_bottleneck = self.classification_encoder(x)
+        localization_bottleneck = self.encoder(x)
+        segmentation_bottleneck, segmentation_features = self.segmentation_encoder(x, return_features=True)
+        localization = self.localization_head(localization_bottleneck)
         if self.image_space_output:
             box_scale = localization.new_tensor([x.shape[-1], x.shape[-2], x.shape[-1], x.shape[-2]])
             localization = localization * box_scale
-            
         return {
-            "classification": self.classification_head(shared_bottleneck),
+            "classification": self.classification_head(classification_bottleneck),
             "localization": localization,
-            "segmentation": self.segmentation_head(shared_bottleneck, shared_features),
+            "segmentation": self.segmentation_head(segmentation_bottleneck, segmentation_features),
         }
